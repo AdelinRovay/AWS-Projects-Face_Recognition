@@ -1,62 +1,82 @@
-#__copyright__   = "Copyright 2024, VISA Lab"
-#__license__     = "MIT"
-
-from boto3 import client as boto3_client
-
-#import ffmpeg
-import urllib.parse
-#import shutil
+# Copyright 2024, VISA Lab
+# License: MIT
 import os
-#import json
-import boto3
+import json
 
-from face_recognition_code import face_recognition_function
+import boto3
+import urllib.parse
+import subprocess
+#import shutil
+#from video_splitting import video_splitting_cmdline
+
+
+def video_splitting_cmdline(video_filename):
+    filename = os.path.basename(video_filename)
+    outfile = os.path.splitext(filename)[0] + ".jpg"
+
+    split_cmd = '/opt/ffmpeglib/ffmpeg -i ' + video_filename + ' -vframes 1 ' + '/tmp/' + outfile
+    try:
+        subprocess.check_call(split_cmd, shell=True)
+    except subprocess.CalledProcessError as e:
+        print(e.returncode)
+        print(e.output)
+
+    #fps_cmd = 'ffmpeg -i ' + video_filename + ' 2>&1 | sed -n "s/.*, \\(.*\\) fp.*/\\1/p"'
+    #fps = subprocess.check_output(fps_cmd, shell=True).decode("utf-8").rstrip("\n")
+    return outfile
+    
+def invoke_face_recognition(bucket_name, image_key):
+    lambda_client = boto3.client('lambda')
+
+    # Corrected payload structure (single record within Records list)
+    payload = {"Records": [{"s3": {"bucket": {"name": bucket_name}, "object": {"key": image_key}}}]}
+
+    # Invoke the face recognition Lambda function
+    response = lambda_client.invoke(
+        FunctionName='arn:aws:lambda:us-east-1:891376918131:function:face-recognition',
+        InvocationType='Event',
+        Payload=json.dumps(payload)
+    )
+    print(response) 
+
 
 def handler(event, context):
-  """Face recognition Lambda function triggered by S3 object creation.
+    print("Processing video...")
 
-  Args:
-      event: S3 event containing the details of the new object.
-      context: Lambda context object.
 
-  Returns:
-      None
-  """
+    # Get input file information from S3 event
+    record = event['Records'][0]['s3']
+    bucket = record['bucket']['name']
+    key = urllib.parse.unquote_plus(record['object']['key'], encoding='utf-8')
+    output_bucket = "1230434246-stage-1"
+    #output_prefix = os.path.splitext(key)[0]
+    video_path = f"/tmp/{key}"
 
-  # Get the bucket name and image file name from the event
-  record = event['Records'][0]['s3']
-  bucket = record['bucket']['name']
-  key = urllib.parse.unquote_plus(record['object']['key'], encoding='utf-8')
+    # Download video from S3
+    s3_client = boto3.client('s3')
+    s3_client.download_file(bucket, key, video_path)
 
-  output_bucket = "1230434246-output"
-  image_path = f"/tmp/{key}"
-  # Download the image from S3
-  s3_client = boto3.client('s3')
-  s3_client.download_file(bucket, key, image_path)
-  
 
-  # Perform face recognition
-  recognized_name = face_recognition_function(image_path)
-  
+    # Process the video and get output directory
+    out_dir = video_splitting_cmdline(video_path)
+    print(out_dir)
 
-  # Upload the result text file to the output bucket
-  #output_bucket_name = "<ASU_ID>-output"  # Replace with your output bucket name
-  output_file_name = os.path.splitext(key)[0] + ".txt"
+    # Upload output to S3
+    upload_to_s3(out_dir, output_bucket)
+    
+    invoke_face_recognition(output_bucket, out_dir)
 
-  if recognized_name:  # Check if a name was recognized
-      # Upload result text file with recognized name
-      with open("/tmp/" + output_file_name, 'w+') as f:
-          f.write(recognized_name)
-      s3_client.upload_file("/tmp/" + output_file_name, output_bucket, output_file_name)
-      
-  else:
-      print(f"No face recognized in image {key}")
-      # You can optionally upload a file indicating no face recognized here
+    # Clean up temporary files
+    os.remove(video_path)
+    #shutil.rmtree("/tmp/"+out_dir)
 
-  # Clean up temporary files
-  os.remove(image_path)
-  if os.path.exists("/tmp/" + output_file_name):  # Only remove if file exists
-      os.remove("/tmp/" + output_file_name)
-
-  return None
-
+    
+    return {
+        'statusCode': 200,
+        'body': 'Video frames split and uploaded to S3 bucket successfully.'
+    }
+    
+def upload_to_s3(out_dir, output_bucket):
+    s3_client = boto3.client('s3')
+    s3_client.upload_file("/tmp/" + out_dir, output_bucket, out_dir)
+    print("Upload complete to Stage-1 Bucket")
