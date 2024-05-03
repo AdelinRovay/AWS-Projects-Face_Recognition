@@ -7,7 +7,7 @@ ARG RUNTIME_VERSION="3.8"
 ARG DISTRO_VERSION="3.12"
 
 FROM alpine:latest
-FROM python:${RUNTIME_VERSION} AS python-alpine
+FROM python:${RUNTIME_VERSION}-slim AS python-alpine
 
 #RUN apt-get update \
 #    && apt-get install -y cmake ca-certificates libgl1-mesa-glx
@@ -39,7 +39,7 @@ RUN chmod 755 /usr/bin/aws-lambda-rie
 
 # Install ffmpeg
 RUN apt-get update 
-RUN apt-get install -y ffmpeg
+# RUN apt-get install -y ffmpeg
 #RUN apk --no-cache add ffmpeg
 
 # Copy handler function
@@ -47,11 +47,15 @@ COPY requirements.txt ${FUNCTION_DIR}
 #COPY ffmpeg ${FUNCTION_DIR}
 #COPY ffmpeg /usr/bin
 
-RUN python${RUNTIME_VERSION} -m pip install -r requirements.txt --target ${FUNCTION_DIR}
+# RUN echo "python${RUNTIME_VERSION} -m pip install -r requirements.txt --target ${FUNCTION_DIR}"
+
+RUN python${RUNTIME_VERSION} -m pip install --default-timeout=1000 -r  requirements.txt --target ${FUNCTION_DIR}
+ENV TORCH_HOME "/tmp/models"
 COPY entry.sh /
 
 # Copy function code
 COPY handler.py ${FUNCTION_DIR}
+COPY face_recognition_code.py ${FUNCTION_DIR}
 RUN chmod 777 /entry.sh
 
 # Set the CMD to your handler (could also be done as a parameter override outside of the Dockerfile)
